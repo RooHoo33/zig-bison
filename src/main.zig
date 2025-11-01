@@ -10,11 +10,12 @@ pub fn main() !void {
 const JsonType = enum {
     String,
     Int,
+    Float,
     Boolean,
     Object,
 };
-const JsonValueType = enum { string, int, obj };
-const JsonValueUnion = union(JsonValueType) { string: StringNode, int: IntNode, obj: ObjectNode };
+const JsonValueType = enum { string, int, float, obj };
+const JsonValueUnion = union(JsonValueType) { string: StringNode, int: IntNode, float: FloatNode, obj: ObjectNode };
 
 const JsonObject = struct { values: [*]const JsonValueUnion };
 
@@ -25,6 +26,7 @@ fn JsonObjectEntry(comptime T: JsonType) type {
             .String => []const u8,
             .Boolean => bool,
             .Int => u64,
+            .Float => f64,
             .Object => JsonObject,
         },
         fn entryType() JsonType {
@@ -35,6 +37,7 @@ fn JsonObjectEntry(comptime T: JsonType) type {
 
 const StringNode = JsonObjectEntry(JsonType.String);
 const IntNode = JsonObjectEntry(JsonType.Int);
+const FloatNode = JsonObjectEntry(JsonType.Float);
 const ObjectNode = JsonObjectEntry(JsonType.Object);
 
 pub fn parseObject(_: []const u8) JsonObject {
@@ -61,26 +64,36 @@ fn parseValue(jsonBlob: []const u8, key: []const u8) JsonValueUnion {
         startingValueIndex = index;
         readingValue = true;
         if (char >= '0' and char <= '9') {
-            const value = readInt(jsonBlob[index..]);
-            return JsonValueUnion{ .int = .{ .name = key, .value = value.value } };
+            const value = readNumer(jsonBlob[index..]);
+            return switch (value) {
+                .int => JsonValueUnion{ .int = .{ .name = key, .value = value.int.value } },
+                .float => JsonValueUnion{ .float = .{ .name = key, .value = value.float.value } },
+            };
         }
     }
     unreachable;
 }
 
-
 const IntResult = struct { value: u64, endIndex: usize };
 const FloatResult = struct { value: f64, endIndex: usize };
-const NumericResult  = union {
-    int: IntResult,
-    float: FloatResult
-};
+const NumericResultEnum = enum { int, float };
+const NumericResult = union(NumericResultEnum) { int: IntResult, float: FloatResult };
 
-fn readInt(jsonBlob: []const u8) IntResult {
+fn readNumer(jsonBlob: []const u8) NumericResult {
+    var isFloat = false;
     for (jsonBlob, 0..) |char, index| {
+        if(char == '.'){
+            isFloat = true;
+            continue;
+        }
         if (char > '9' or char < '0') {
-            const intVal = std.fmt.parseInt(u64, jsonBlob[0..index], 10) catch 0;
-            return IntResult{ .value = intVal, .endIndex = index - 1 };
+            if(isFloat) {
+                const floatVal = std.fmt.parseFloat(f64, jsonBlob[0..index]) catch 0;
+                return .{.float = FloatResult{ .value = floatVal, .endIndex = index - 1 }};
+            } else {
+                const intVal = std.fmt.parseInt(u64, jsonBlob[0..index], 10) catch 0;
+                return .{.int = IntResult{ .value = intVal, .endIndex = index - 1 }};
+            }
         }
     }
     unreachable;
@@ -102,11 +115,18 @@ fn parseKey(jsonBlob: []const u8) KeyResult {
     }
     unreachable;
 }
-test "can parse a string" {
+test "can parse a int" {
     const testValue = "\"example\": 2 ";
     const jsonValue = parseEntry(testValue);
 
     const expectedValue = JsonValueUnion{ .int = .{ .name = "example", .value = 2 } };
+    try std.testing.expectEqualDeep(expectedValue, jsonValue);
+}
+test "can parse a float" {
+    const testValue = "\"example\": 2.3 ";
+    const jsonValue = parseEntry(testValue);
+
+    const expectedValue = JsonValueUnion{ .float = .{ .name = "example", .value = 2.3 } };
     try std.testing.expectEqualDeep(expectedValue, jsonValue);
 }
 //pub fn parse(jsonBlob: []const u8) !JsonObject {
