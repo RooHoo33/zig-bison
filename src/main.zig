@@ -27,7 +27,7 @@ const JsonValue = union(JsonType) {
     Array: JsonTypeDataType(JsonType.Array),
 };
 
-const JsonObject = struct { values: [*]const JsonValueUnion };
+const JsonObject = struct { values: []const JsonValueUnion };
 
 fn JsonTypeDataType(comptime T: JsonType) type {
     return switch (T) {
@@ -56,21 +56,21 @@ const FloatNode = JsonObjectEntry(JsonType.Float);
 const ObjectNode = JsonObjectEntry(JsonType.Object);
 const ArrayNode = JsonObjectEntry(JsonType.Array);
 
-pub fn parseObject(_: []const u8) JsonObject {
-    return JsonObject{ .values = &[_]JsonValueUnion{JsonValueUnion{ .int = IntNode{ .name = "abc", .value = 23 } }} };
-}
-
 const KeyResult = struct {
     key: []const u8,
     keyEndIndex: usize,
 };
 
-fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !JsonValueUnion {
+const EntryResult = struct { entry: JsonValueUnion, endIndex: usize };
+
+fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !EntryResult {
     const keyResult = parseKey(jsonBlob);
     const value = try parseValue(gpa, jsonBlob[keyResult.keyEndIndex + 1 ..]);
 
+    std.debug.print("We got a key index of {} and a value index {}\n", .{ keyResult.keyEndIndex, value.endIndex });
+
     // TODO there has to be a better way to do this
-    return switch (value.value) {
+    const entry: JsonValueUnion = switch (value.value) {
         .Int => .{ .int = IntNode{ .name = keyResult.key, .value = value.value.Int } },
         .Float => .{ .float = FloatNode{ .name = keyResult.key, .value = value.value.Float } },
         .String => .{ .string = StringNode{ .name = keyResult.key, .value = value.value.String } },
@@ -78,6 +78,7 @@ fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !JsonValueUnion {
         .Array => .{ .array = ArrayNode{ .name = keyResult.key, .value = value.value.Array } },
         .Boolean => unreachable,
     };
+    return .{ .entry = entry, .endIndex = keyResult.keyEndIndex + value.endIndex + 1 };
 }
 fn readListValues(gpa: std.mem.Allocator, jsonBlob: []const u8) std.mem.Allocator.Error!ValueResult {
     var valuesArray = std.ArrayList(JsonValue)
@@ -111,6 +112,7 @@ test "can parse an list of" {
 
 const ValueResult = struct { value: JsonValue, endIndex: usize };
 fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
+    std.debug.print("we are trying to read= {s}\n", .{jsonBlob});
     var readingValue = false;
     var startingValueIndex: usize = undefined;
 
@@ -125,6 +127,10 @@ fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
             const valueResult = try readListValues(gpa, jsonBlob[index..]);
             return ValueResult{ .value = JsonValue{ .Array = valueResult.value.Array }, .endIndex = index + valueResult.endIndex };
         }
+        if (char == '{') {
+            const valueResult = try parseObject(gpa, jsonBlob[index..]);
+            return ValueResult{ .value = JsonValue{ .Object = valueResult.value }, .endIndex = index + valueResult.endIndex };
+        }
         if (char >= '0' and char <= '9') {
             const value = readNumer(jsonBlob[index..]);
             return switch (value) {
@@ -134,6 +140,7 @@ fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
         }
         if (char == '"') {
             const value = readstring(jsonBlob[index..]);
+            std.debug.print("We got a string. (Value={s}), value end index = {}, current index = {}\n", .{ jsonBlob, value.endIndex, index });
             return ValueResult{ .value = JsonValue{ .String = value.value }, .endIndex = index + value.endIndex };
         }
     }
@@ -145,6 +152,7 @@ const FloatResult = struct { value: f64, endIndex: usize };
 const NumericResultEnum = enum { int, float };
 const NumericResult = union(NumericResultEnum) { int: IntResult, float: FloatResult };
 const StringResult = struct { value: []const u8, endIndex: usize };
+const ObjectResult = struct { value: JsonObject, endIndex: usize };
 
 fn readstring(jsonBlob: []const u8) StringResult {
     var readingString = false;
@@ -162,7 +170,79 @@ fn readstring(jsonBlob: []const u8) StringResult {
     unreachable;
 }
 
-test "can read a string properly" {
+fn parseObject(gpa: std.mem.Allocator, jsonBlob: []const u8) std.mem.Allocator.Error!ObjectResult {
+    var index: usize = 0;
+    var valuesArray = std.ArrayList(JsonValueUnion)
+        .initCapacity(gpa, 10) catch unreachable;
+    errdefer valuesArray.deinit(gpa);
+    while (index < jsonBlob.len) {
+        std.debug.print("We are reading {s}\n", .{jsonBlob[index..]});
+        if (jsonBlob[index] == '}') {
+            const values = try valuesArray.toOwnedSlice(gpa);
+            const result = JsonObject{ .values = values };
+            return .{ .endIndex = index + 1, .value = result };
+        }
+        if (jsonBlob[index] == '{' or jsonBlob[index] == ' ' or jsonBlob[index] == '\n') {
+            index += 1;
+            continue;
+        }
+        const entryResult = try parseEntry(gpa, jsonBlob[index..]);
+        try valuesArray.append(gpa, entryResult.entry);
+        index += entryResult.endIndex + 1;
+    }
+    unreachable;
+}
+
+test "can read a json object" {
+    const testString =
+        \\ {
+        \\   "name":"Jack",
+        \\   "age": 12
+        \\ }
+    ;
+    const gpa = std.testing.allocator;
+    const result = try parseObject(gpa, testString);
+    defer gpa.free(result.value.values);
+
+    const expectedStringValue: StringNode = .{ .name = "name", .value = "Jack" };
+    try std.testing.expectEqualDeep(expectedStringValue, result.value.values[0].string);
+
+    const expectedIntValue: IntNode = .{ .name = "age", .value = 12 };
+    try std.testing.expectEqualDeep(expectedIntValue, result.value.values[1].int);
+}
+test "can read a complex json object" {
+    const testString =
+        \\ {"name":"Jack", "age": 12, "address": { "street": "123 west ave", "zipcode": 12345 } }
+    ;
+    const gpa = std.testing.allocator;
+    const result = try parseObject(gpa, testString);
+    defer gpa.free(result.value.values);
+    defer gpa.free(result.value.values[2].obj.value.values);
+
+    const expectedStringValue: StringNode = .{ .name = "name", .value = "Jack" };
+    try std.testing.expectEqualDeep(expectedStringValue, result.value.values[0].string);
+
+    const expectedIntValue: IntNode = .{ .name = "age", .value = 12 };
+    try std.testing.expectEqualDeep(expectedIntValue, result.value.values[1].int);
+
+    const ob: JsonObject = .{ .values = &.{ JsonValueUnion{
+        .string = StringNode{ .name = "street", .value = "123 west ave" },
+    }, JsonValueUnion{
+        .int = IntNode{ .name = "zipcode", .value = 12345 },
+    } } };
+
+    const expectedObject = ObjectNode{ .name = "address", .value = ob };
+    try std.testing.expectEqualDeep(expectedObject, result.value.values[2].obj);
+}
+
+test "can read a simple string properly" {
+    const testString = " : \"hello\" ";
+
+    const result = readstring(testString);
+    try std.testing.expectEqual('"', testString[result.endIndex]);
+    try std.testing.expectEqualStrings("hello", result.value);
+}
+test "can read a complex string properly" {
     const testString = " : \"hello \\\" world\" ";
 
     const result = readstring(testString);
@@ -172,22 +252,49 @@ test "can read a string properly" {
 
 fn readNumer(jsonBlob: []const u8) NumericResult {
     var isFloat = false;
+    var foundNumber = false;
+    var startingIndex: usize = 0;
     for (jsonBlob, 0..) |char, index| {
+        if (foundNumber == false and (char > '9' or char < '0')) {
+            continue;
+        } else if (foundNumber == false) {
+            foundNumber = true;
+            startingIndex = index;
+        }
+
         if (char == '.') {
             isFloat = true;
             continue;
         }
+        if (index == jsonBlob.len - 1) {
+            if (isFloat) {
+                const floatVal = std.fmt.parseFloat(f64, jsonBlob[startingIndex..]) catch 0;
+                return .{ .float = FloatResult{ .value = floatVal, .endIndex = index } };
+            } else {
+                const intVal = std.fmt.parseInt(u64, jsonBlob[startingIndex..], 10) catch 0;
+                return .{ .int = IntResult{ .value = intVal, .endIndex = index } };
+            }
+        }
+
         if (char > '9' or char < '0') {
             if (isFloat) {
-                const floatVal = std.fmt.parseFloat(f64, jsonBlob[0..index]) catch 0;
+                const floatVal = std.fmt.parseFloat(f64, jsonBlob[startingIndex..index]) catch 0;
                 return .{ .float = FloatResult{ .value = floatVal, .endIndex = index - 1 } };
             } else {
-                const intVal = std.fmt.parseInt(u64, jsonBlob[0..index], 10) catch 0;
+                const intVal = std.fmt.parseInt(u64, jsonBlob[startingIndex..index], 10) catch 0;
                 return .{ .int = IntResult{ .value = intVal, .endIndex = index - 1 } };
             }
         }
     }
     unreachable;
+}
+
+test "can read a number and get the expected index back" {
+    const input = " : 12345";
+    const result = readNumer(input);
+
+    try std.testing.expectEqual(7, result.int.endIndex);
+    try std.testing.expectEqual(12345, result.int.value);
 }
 fn parseKey(jsonBlob: []const u8) KeyResult {
 
@@ -209,15 +316,16 @@ fn parseKey(jsonBlob: []const u8) KeyResult {
 test "can parse a string" {
     const testValue = "\"example\": \"hello \\\"world\\\"\" ";
     const gpa = std.testing.allocator;
-    const jsonValue = parseEntry(gpa, testValue);
-
+    const entryResult = try parseEntry(gpa, testValue);
+    const jsonValue = entryResult.entry;
     const expectedValue = JsonValueUnion{ .string = .{ .name = "example", .value = "hello \\\"world\\\"" } };
     try std.testing.expectEqualDeep(expectedValue, jsonValue);
 }
 test "can parse a int" {
     const testValue = "\"example\": 2 ";
     const gpa = std.testing.allocator;
-    const jsonValue = parseEntry(gpa, testValue);
+    const entryResult = try parseEntry(gpa, testValue);
+    const jsonValue = entryResult.entry;
 
     const expectedValue = JsonValueUnion{ .int = .{ .name = "example", .value = 2 } };
     try std.testing.expectEqualDeep(expectedValue, jsonValue);
@@ -225,7 +333,8 @@ test "can parse a int" {
 test "can parse a float" {
     const testValue = "\"example\": 2.3 ";
     const gpa = std.testing.allocator;
-    const jsonValue = parseEntry(gpa, testValue);
+    const entryResult = try parseEntry(gpa, testValue);
+    const jsonValue = entryResult.entry;
 
     const expectedValue = JsonValueUnion{ .float = .{ .name = "example", .value = 2.3 } };
     try std.testing.expectEqualDeep(expectedValue, jsonValue);
@@ -233,7 +342,8 @@ test "can parse a float" {
 test "can parse a list of ints" {
     const testValue = "\"example\": [2, 32, 54] ";
     const gpa = std.heap.page_allocator;
-    const jsonValue = try parseEntry(gpa, testValue);
+    const entryResult = try parseEntry(gpa, testValue);
+    const jsonValue = entryResult.entry;
     defer gpa.free(jsonValue.array.value);
 
     //const expectedValuesList: []const JsonValue = &.{};
