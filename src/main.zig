@@ -67,8 +67,6 @@ fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !EntryResult {
     const keyResult = parseKey(jsonBlob);
     const value = try parseValue(gpa, jsonBlob[keyResult.keyEndIndex + 1 ..]);
 
-    std.debug.print("We got a key index of {} and a value index {}\n", .{ keyResult.keyEndIndex, value.endIndex });
-
     // TODO there has to be a better way to do this
     const entry: JsonValueUnion = switch (value.value) {
         .Int => .{ .int = IntNode{ .name = keyResult.key, .value = value.value.Int } },
@@ -101,7 +99,7 @@ fn readListValues(gpa: std.mem.Allocator, jsonBlob: []const u8) std.mem.Allocato
     unreachable;
 }
 
-test "can parse an list of" {
+test "can parse a list value of ints" {
     const str = "[1,2,3]";
     const gpa = std.testing.allocator;
     const result = try readListValues(gpa, str);
@@ -112,12 +110,11 @@ test "can parse an list of" {
 
 const ValueResult = struct { value: JsonValue, endIndex: usize };
 fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
-    std.debug.print("we are trying to read= {s}\n", .{jsonBlob});
     var readingValue = false;
     var startingValueIndex: usize = undefined;
 
     for (jsonBlob, 0..) |char, index| {
-        if (readingValue == false and (char == ' ' or char == ':')) {
+        if (readingValue == false and (char == ' ' or char == ':' or char == ',')) {
             continue;
         }
 
@@ -140,7 +137,6 @@ fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
         }
         if (char == '"') {
             const value = readstring(jsonBlob[index..]);
-            std.debug.print("We got a string. (Value={s}), value end index = {}, current index = {}\n", .{ jsonBlob, value.endIndex, index });
             return ValueResult{ .value = JsonValue{ .String = value.value }, .endIndex = index + value.endIndex };
         }
     }
@@ -176,7 +172,6 @@ fn parseObject(gpa: std.mem.Allocator, jsonBlob: []const u8) std.mem.Allocator.E
         .initCapacity(gpa, 10) catch unreachable;
     errdefer valuesArray.deinit(gpa);
     while (index < jsonBlob.len) {
-        std.debug.print("We are reading {s}\n", .{jsonBlob[index..]});
         if (jsonBlob[index] == '}') {
             const values = try valuesArray.toOwnedSlice(gpa);
             const result = JsonObject{ .values = values };
@@ -266,16 +261,6 @@ fn readNumer(jsonBlob: []const u8) NumericResult {
             isFloat = true;
             continue;
         }
-        if (index == jsonBlob.len - 1) {
-            if (isFloat) {
-                const floatVal = std.fmt.parseFloat(f64, jsonBlob[startingIndex..]) catch 0;
-                return .{ .float = FloatResult{ .value = floatVal, .endIndex = index } };
-            } else {
-                const intVal = std.fmt.parseInt(u64, jsonBlob[startingIndex..], 10) catch 0;
-                return .{ .int = IntResult{ .value = intVal, .endIndex = index } };
-            }
-        }
-
         if (char > '9' or char < '0') {
             if (isFloat) {
                 const floatVal = std.fmt.parseFloat(f64, jsonBlob[startingIndex..index]) catch 0;
@@ -283,6 +268,15 @@ fn readNumer(jsonBlob: []const u8) NumericResult {
             } else {
                 const intVal = std.fmt.parseInt(u64, jsonBlob[startingIndex..index], 10) catch 0;
                 return .{ .int = IntResult{ .value = intVal, .endIndex = index - 1 } };
+            }
+        }
+        if (index == jsonBlob.len - 1) {
+            if (isFloat) {
+                const floatVal = std.fmt.parseFloat(f64, jsonBlob[startingIndex..]) catch 0;
+                return .{ .float = FloatResult{ .value = floatVal, .endIndex = index } };
+            } else {
+                const intVal = std.fmt.parseInt(u64, jsonBlob[startingIndex..], 10) catch 0;
+                return .{ .int = IntResult{ .value = intVal, .endIndex = index } };
             }
         }
     }
@@ -294,6 +288,13 @@ test "can read a number and get the expected index back" {
     const result = readNumer(input);
 
     try std.testing.expectEqual(7, result.int.endIndex);
+    try std.testing.expectEqual(12345, result.int.value);
+}
+test "can read last number in array" {
+    const input = "12345]";
+    const result = readNumer(input);
+
+    try std.testing.expectEqual(4, result.int.endIndex);
     try std.testing.expectEqual(12345, result.int.value);
 }
 fn parseKey(jsonBlob: []const u8) KeyResult {
