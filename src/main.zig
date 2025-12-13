@@ -65,7 +65,7 @@ const EntryResult = struct { entry: JsonValueUnion, endIndex: usize };
 
 fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !EntryResult {
     const keyResult = parseKey(jsonBlob);
-    const value = try parseValue(gpa, jsonBlob[keyResult.keyEndIndex + 1 ..]);
+    const value = try parseJsonValue(gpa, jsonBlob[keyResult.keyEndIndex + 1 ..]);
 
     // TODO there has to be a better way to do this
     const entry: JsonValueUnion = switch (value.value) {
@@ -92,7 +92,7 @@ fn readListValues(gpa: std.mem.Allocator, jsonBlob: []const u8) std.mem.Allocato
             const slice: []const JsonValue = try valuesArray.toOwnedSlice(gpa);
             return ValueResult{ .value = JsonValue{ .Array = slice }, .endIndex = index };
         }
-        const valueResult = try parseValue(gpa, jsonBlob[index..]);
+        const valueResult = try parseJsonValue(gpa, jsonBlob[index..]);
         valuesArray.append(gpa, valueResult.value) catch unreachable;
         index += valueResult.endIndex + 1;
     }
@@ -109,7 +109,7 @@ test "can parse a list value of ints" {
 }
 
 const ValueResult = struct { value: JsonValue, endIndex: usize };
-fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
+fn parseJsonValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
     var readingValue = false;
     var startingValueIndex: usize = undefined;
 
@@ -144,11 +144,13 @@ fn parseValue(gpa: std.mem.Allocator, jsonBlob: []const u8) !ValueResult {
 }
 
 const IntResult = struct { value: u64, endIndex: usize };
+const BooleanResult = struct { value: bool, endIndex: usize }; // TODO we need boolean  support
 const FloatResult = struct { value: f64, endIndex: usize };
 const NumericResultEnum = enum { int, float };
 const NumericResult = union(NumericResultEnum) { int: IntResult, float: FloatResult };
 const StringResult = struct { value: []const u8, endIndex: usize };
 const ObjectResult = struct { value: JsonObject, endIndex: usize };
+
 
 fn readstring(jsonBlob: []const u8) StringResult {
     var readingString = false;
@@ -347,7 +349,7 @@ test "can parse a list of ints" {
     const jsonValue = entryResult.entry;
     defer gpa.free(jsonValue.array.value);
 
-    //const expectedValuesList: []const JsonValue = &.{};
+    //const expectedValuesList: []const sonValue = &.{};
 
     //const expectedValue = JsonValueUnion{ .array = .{ .name = "example", .value = expectedValuesList } };
     //try std.testing.expectEqualDeep(expectedValue, jsonValue);
