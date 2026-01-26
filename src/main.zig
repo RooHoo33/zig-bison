@@ -61,6 +61,96 @@ const KeyResult = struct {
     keyEndIndex: usize,
 };
 
+const indentSize = 2;
+
+fn printNode(gpa: std.mem.Allocator, node: JsonValueUnion, indent: u8) anyerror![]u8 {
+    const pad: []u8 = try gpa.alloc(u8, indent);
+    defer gpa.free(pad);
+    for (0..indent) |index| {
+        pad[index] = ' ';
+    }
+    const result = try switch (node) {
+        .int => std.fmt.allocPrint(gpa, "\"{s}\": {d}", .{ node.int.name, node.int.value }),
+        .array => {
+            var stringResult = try std.ArrayList(u8)
+                .initCapacity(gpa, 20);
+            try stringResult.appendSlice(gpa, "[\n");
+            for(node.array.value, 0..) |listValue, index| {
+                const result = try printNode(gpa, listValue, indent + indentSize);
+                defer gpa.free(result);
+                if (index != 0) {
+                    try stringResult.appendSlice(gpa, ",\n");
+                }
+                //try stringResult.appendSlice(gpa, pad);
+                try stringResult.appendSlice(gpa, result);
+            }
+            try stringResult.appendSlice(gpa, "\n");
+            try stringResult.appendSlice(gpa, pad);
+            try stringResult.appendSlice(gpa, "}");
+        },
+        .obj => blk: {
+            var stringResult = try std.ArrayList(u8)
+                .initCapacity(gpa, 20);
+            //defer gpa.free(stringResult);
+
+            try stringResult.appendSlice(gpa, "{\n");
+            for (node.obj.value.values, 0..) |objValue, index| {
+                const result = try printNode(gpa, objValue, indent + indentSize);
+                defer gpa.free(result);
+                if (index != 0) {
+                    try stringResult.appendSlice(gpa, ",\n");
+                }
+                //try stringResult.appendSlice(gpa, pad);
+                try stringResult.appendSlice(gpa, result);
+            }
+            try stringResult.appendSlice(gpa, "\n");
+            try stringResult.appendSlice(gpa, pad);
+            try stringResult.appendSlice(gpa, "}");
+            break :blk try stringResult.toOwnedSlice(gpa);
+        },
+        else => unreachable,
+    };
+    defer gpa.free(result);
+    return std.mem.concat(gpa, u8, &.{ pad, result });
+}
+
+test "can print a int node" {
+    const int: IntNode = .{ .name = "age", .value = 20 };
+    const gpa = std.testing.allocator;
+    const result = try printNode(gpa, .{ .int = int }, 2);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings("  \"age\": 20", result);
+}
+
+test "can print a list of ints" {
+
+    const intValueOne: JsonValue =  JsonValue{.Int = 5}; 
+    const intValueTwo: JsonValue =  JsonValue{.Int = 2}; 
+    const array: ArrayNode = .{.name = "ages", .value = &.{intValueOne, intValueTwo}};
+    const gpa = std.testing.allocator;
+    const result = try printNode(gpa, .{ .array = array }, 2);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings("  \"age\": 20", result);
+}
+
+test "can print an object node" {
+    const int: IntNode = .{ .name = "age", .value = 20 };
+
+    const obj: JsonObject = .{ .values = &.{JsonValueUnion{
+        .int = int,
+    }} };
+    const objectNode: ObjectNode = .{ .name = "person", .value = obj };
+    const gpa = std.testing.allocator;
+    const result = try printNode(gpa, .{ .obj = objectNode }, 2);
+    defer gpa.free(result);
+    const expected =
+        \\  {
+        \\    "age": 20
+        \\  }
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
 const EntryResult = struct { entry: JsonValueUnion, endIndex: usize };
 
 fn parseEntry(gpa: std.mem.Allocator, jsonBlob: []const u8) !EntryResult {
@@ -150,7 +240,6 @@ const NumericResultEnum = enum { int, float };
 const NumericResult = union(NumericResultEnum) { int: IntResult, float: FloatResult };
 const StringResult = struct { value: []const u8, endIndex: usize };
 const ObjectResult = struct { value: JsonObject, endIndex: usize };
-
 
 fn readstring(jsonBlob: []const u8) StringResult {
     var readingString = false;
