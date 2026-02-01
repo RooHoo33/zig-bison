@@ -4,10 +4,10 @@ const Tuple = std.meta.Tuple;
 
 const Index = u64;
 
-const JsonValueEnum = enum { Int, Float, String, Boolean, Object, Array, Null };
+pub const JsonValueEnum = enum { Int, Float, String, Boolean, Object, Array, Null };
 
-const ObjectEntry = struct { name: []const u8, value: JsonValueType };
-const Object = struct {
+pub const ObjectEntry = struct { name: []const u8, value: JsonValueType };
+pub const Object = struct {
     entries: []const ObjectEntry,
 
     pub fn free(self: *Object, gpa: Allocator) void {
@@ -24,7 +24,7 @@ const Object = struct {
         gpa.free(self.entries);
     }
 };
-const JsonValueType = union(JsonValueEnum) {
+pub const JsonValueType = union(JsonValueEnum) {
     Int: i64,
     Float: f64,
     String: []const u8,
@@ -41,7 +41,7 @@ const JsonValueType = union(JsonValueEnum) {
     }
 };
 
-fn parseJson(gpa: Allocator, jsonBlob: []const u8) !JsonValueType {
+pub fn parseJson(gpa: Allocator, jsonBlob: []const u8) !JsonValueType {
     for (jsonBlob, 0..) |char, index| {
         if (char == '{') {
             const object, _ = try parseObject(gpa, jsonBlob[index..]);
