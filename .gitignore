@@ -1,3 +1,4 @@
 # zig
 zig-out/
 .zig-cache/
+.DS_store
