@@ -1,6 +1,6 @@
 const std = @import("std");
 
-fn matches(value: []const u8, search: []const u8) bool {
+pub fn matches(value: []const u8, search: []const u8) bool {
     var searchIndex:usize = 0;
     if (search.len == 0) {
         return true;

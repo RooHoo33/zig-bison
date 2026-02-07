@@ -137,6 +137,7 @@ fn parseValue(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueT
             return .{ value, index + returnIndex };
         }
     }
+    std.debug.print("Trying to read value {s}", .{jsonBlob});
     unreachable;
 }
 
@@ -145,7 +146,7 @@ fn parseList(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueTy
     defer values.clearAndFree(gpa);
     var index: usize = 1; // skip 0 becsuase thats the [ char
     while (index < jsonBlob.len) {
-        if (jsonBlob[index] == ',') {
+        if (jsonBlob[index] == ',' or jsonBlob[index] == '\n' or jsonBlob[index] == ' ') {
             index += 1;
         } else if (jsonBlob[index] == ']') {
             return .{ JsonValueType{ .Array = try values.toOwnedSlice(gpa) }, index };
@@ -253,4 +254,25 @@ test "can parse nulls" {
     const missingEntry = ObjectEntry{ .name = "missing", .value = JsonValueType{ .Null = {} } };
     const expected = JsonValueType{ .Object = Object{ .entries = &.{missingEntry} } };
     try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
+}
+
+test "can parse a multiline list" {
+    const json =
+        \\  {
+        \\      "rand": [
+        \\        1,
+        \\        2,
+        \\        3
+        \\      ]
+        \\  }
+    ;
+    const gpa = std.testing.allocator;
+    var result = try parseJson(gpa, json);
+    defer result.free(gpa);
+    const randNumbers = JsonValueType{ .Array = &.{ JsonValueType{ .Int = 1 }, JsonValueType{ .Int = 2 }, JsonValueType{ .Int = 3 } } };
+    const randEntry = ObjectEntry{ .name = "rand", .value = randNumbers };
+
+    const expected = JsonValueType{ .Object = Object{ .entries = &.{ randEntry } } };
+    try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
+
 }

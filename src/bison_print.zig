@@ -54,7 +54,7 @@ fn printRootObjectEntry(gpa: std.mem.Allocator, node: Bison.ObjectEntry, indent:
     return try stringResult.toOwnedSlice(gpa);
 }
 
-fn printValue(gpa: std.mem.Allocator, node: Bison.JsonValueType, indent: u8) anyerror![]u8 {
+pub fn printValue(gpa: std.mem.Allocator, node: Bison.JsonValueType, indent: u8) anyerror![]u8 {
     const pad = try getPad(gpa, indent);
     defer gpa.free(pad);
 
