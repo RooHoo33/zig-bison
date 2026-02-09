@@ -11,13 +11,32 @@ const BadArgError = error{
     MISSING_ARG,
 };
 
+fn readStdIn(gpa: Allocator) ![]const u8 {
+    var stdin_buffer: [1024]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+    if (std.fs.File.stdin().isTty()) {
+        return &.{};
+    }
+    const stdin = &stdin_reader.interface;
+    var stdInArray = try std.ArrayList(u8).initCapacity(gpa, 100);
+
+    while (stdin.takeByte()) |char| {
+        try stdInArray.append(gpa, char);
+    } else |_| {}
+    return try stdInArray.toOwnedSlice(gpa);
+}
+
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
+    const stdReadBytes = try readStdIn(gpa);
+    defer gpa.free(stdReadBytes);
+
     var args = try std.process.argsWithAllocator(gpa);
     defer args.deinit();
     var token: []const u8 = "";
-    var json: []const u8 = undefined;
     var index: usize = 0;
+
+    var json: ?[]const u8 = null;
     while (args.next()) |arg| {
         switch (index) {
             0 => {},
@@ -34,11 +53,16 @@ pub fn main() !void {
         }
         index += 1;
     }
-    if (index < 2) {
+    if (stdReadBytes.len > 0) {
+        if (json) |_json| {
+            token = _json;
+        }
+        json = stdReadBytes;
+    } else if (index < 2) {
         std.log.err("Missing arguments, must pass json", .{});
         return BadArgError.MISSING_ARG;
     }
-    const result = try findObject(gpa, json, token);
+    const result = try findObject(gpa, json.?, token);
     defer gpa.free(result);
     _ = try std.fs.File.stdout().write(result);
     _ = try std.fs.File.stdout().write("\n");
@@ -51,8 +75,14 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
     if (search.len == 0) {
         return BisonPrint.printValue(gpa, json, 0);
     }
-    var searchTokens = std.mem.splitAny(u8, search, ".");
-    const match = findMatchingEntry(json.Object, &searchTokens);
+    var searchTokensIter = std.mem.splitScalar(u8, search, '.');
+    var searchTokens = try std.ArrayList([]const u8).initCapacity(gpa, 5);
+    while (searchTokensIter.next()) |searchToken| {
+        try searchTokens.append(gpa, searchToken);
+    }
+    const searchTokensSlice = try searchTokens.toOwnedSlice(gpa);
+    defer gpa.free(searchTokensSlice);
+    const match = findMatchingEntry(json.Object, searchTokensSlice);
 
     if (match) |value| {
         return BisonPrint.printValue(gpa, value.value, 0);
@@ -60,20 +90,31 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
         return "";
     }
 }
-fn findMatchingEntry(object: Bison.Object, searchTokens: *TokenIterator) ?Bison.ObjectEntry {
-    if (searchTokens.next()) |token| {
+fn findMatchingEntry(object: Bison.Object, searchTokens: [][]const u8) ?Bison.ObjectEntry {
+    if (searchTokens.len > 0) {
         for (object.entries) |entry| {
-            const matches = BisonFZF.matches(entry.name, token);
+            const matches = BisonFZF.matches(entry.name, searchTokens[0]);
             if (matches == false) {
                 continue;
-            } else if (searchTokens.peek() != null and entry.value != .Object) {
+            } else if (searchTokens.len > 1 and entry.value != .Object) {
                 continue;
-            } else if (searchTokens.peek() != null) {
-                return findMatchingEntry(entry.value.Object, searchTokens);
+            } else if (searchTokens.len > 1) {
+                return findMatchingEntry(entry.value.Object, searchTokens[1..]);
             } else {
                 return entry;
             }
         }
+        for (object.entries) |entry| {
+            switch (entry.value) {
+                .Object => {
+                    if (findMatchingEntry(entry.value.Object, searchTokens)) |nextedMatch| {
+                        return nextedMatch;
+                    }
+                },
+                else => {},
+            }
+        }
+
         return null;
     } else {
         return null;
@@ -137,6 +178,29 @@ test "can find nested object" {
     try std.testing.expectEqualStrings(expected, result);
 }
 
+test "if key doesnt match root, children are checked" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "value": {
+        \\      "age": 234,
+        \\      "name": "Jack \"Jack\" Me",
+        \\      "rand": [
+        \\        1,
+        \\        2,
+        \\        3
+        \\      ]
+        \\    }
+        \\  }
+    ;
+    const search = "nam";
+
+    const expected = "\"Jack \\\"Jack\\\" Me\"";
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
 test "can find double nested object" {
     const gpa = std.testing.allocator;
     const json =
