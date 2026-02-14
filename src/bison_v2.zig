@@ -10,16 +10,9 @@ pub const ObjectEntry = struct { name: []const u8, value: JsonValueType };
 pub const Object = struct {
     entries: []const ObjectEntry,
 
-    pub fn free(self: *Object, gpa: Allocator) void {
+    pub fn free(self: *const Object, gpa: Allocator) void {
         for (self.entries) |entry| {
-            switch (entry.value) {
-                .Array => gpa.free(entry.value.Array),
-                .Object => {
-                    var object = entry.value.Object;
-                    object.free(gpa);
-                },
-                else => {},
-            }
+            entry.value.free(gpa);
         }
         gpa.free(self.entries);
     }
@@ -32,10 +25,28 @@ pub const JsonValueType = union(JsonValueEnum) {
     Object: Object,
     Array: []const JsonValueType,
     Null: void,
-    pub fn free(self: *JsonValueType, gpa: Allocator) void {
+    pub fn free(self: *const JsonValueType, gpa: Allocator) void {
         switch (self.*) {
-            .Object => self.Object.free(gpa),
-            .Array => gpa.free(self.Array),
+            .Object => {
+                self.Object.free(gpa);
+            },
+            .Array => {
+                for (self.Array) |arrayValue| {
+                    switch(arrayValue) {
+                        .Object => |objValue| {
+                            objValue.free(gpa);
+                        },
+                        .Array => |arrayValues| {
+                            for (arrayValues) |innerArrayValue| {
+                            innerArrayValue.free(gpa);
+                            }
+                        },
+                        else => {}
+                }
+                }
+                gpa.free(self.Array);
+            }
+            ,
             else => {},
         }
     }
@@ -146,7 +157,7 @@ fn parseList(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueTy
     defer values.clearAndFree(gpa);
     var index: usize = 1; // skip 0 becsuase thats the [ char
     while (index < jsonBlob.len) {
-        if (jsonBlob[index] == ',' or jsonBlob[index] == '\n' or jsonBlob[index] == ' ') {
+        if (jsonBlob[index] == ',' or jsonBlob[index] == '\n' or jsonBlob[index] == ' ' or jsonBlob[index] == '}') {
             index += 1;
         } else if (jsonBlob[index] == ']') {
             return .{ JsonValueType{ .Array = try values.toOwnedSlice(gpa) }, index };
@@ -275,4 +286,44 @@ test "can parse a multiline list" {
     const expected = JsonValueType{ .Object = Object{ .entries = &.{ randEntry } } };
     try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
 
+}
+
+test "can parse complex list of objects" {
+    const json =
+        \\{
+        \\  "name": "Alex",
+        \\  "purchases": [
+        \\    {
+        \\      "orders": [
+        \\        { "payment": "CREDIT", "id": 101 },
+        \\        { "payment": "CASH", "id": 102 }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const gpa = std.testing.allocator;
+    var result = try parseJson(gpa, json);
+    defer result.free(gpa);
+
+    const order1Id = ObjectEntry{ .name = "id", .value = JsonValueType{ .Int = 101 } };
+    const order1Pay = ObjectEntry{ .name = "payment", .value = JsonValueType{ .String = "CREDIT" } };
+    const order1 = JsonValueType{ .Object = Object{ .entries = &.{ order1Pay, order1Id } } };
+
+    const order2Id = ObjectEntry{ .name = "id", .value = JsonValueType{ .Int = 102 } };
+    const order2Pay = ObjectEntry{ .name = "payment", .value = JsonValueType{ .String = "CASH" } };
+    const order2 = JsonValueType{ .Object = Object{ .entries = &.{ order2Pay, order2Id } } };
+
+    const ordersArray = JsonValueType{ .Array = &.{ order1, order2 } };
+    const ordersEntry = ObjectEntry{ .name = "orders", .value = ordersArray };
+    const purchase1 = JsonValueType{ .Object = Object{ .entries = &.{ordersEntry} } };
+
+    const nameEntry = ObjectEntry{ .name = "name", .value = JsonValueType{ .String = "Alex" } };
+    const purchasesArray = JsonValueType{ .Array = &.{purchase1} };
+    const purchasesEntry = ObjectEntry{ .name = "purchases", .value = purchasesArray };
+
+    const expected = JsonValueType{ .Object = Object{ .entries = &.{ nameEntry, purchasesEntry } } };
+
+    try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
 }
