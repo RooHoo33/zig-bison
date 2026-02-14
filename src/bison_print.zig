@@ -36,7 +36,7 @@ fn printRootObject(gpa: std.mem.Allocator, object: Bison.Object, indent: u8) ![]
     defer gpa.free(pad);
     const objectString = try printObject(gpa, object, indent);
     defer gpa.free(objectString);
-    return try std.mem.concat(gpa, u8, &.{pad, objectString});
+    return try std.mem.concat(gpa, u8, &.{ pad, objectString });
 }
 
 fn printRootObjectEntry(gpa: std.mem.Allocator, node: Bison.ObjectEntry, indent: u8) anyerror![]u8 {
@@ -162,7 +162,7 @@ test "can print a complex object node" {
 
     const nestedObject = Bison.ObjectEntry{ .name = "value", .value = Bison.JsonValueType{ .Object = nestedObjectValue } };
     const idEntry = Bison.ObjectEntry{ .name = "id", .value = Bison.JsonValueType{ .String = "abc123" } };
-    const rootObject = Bison.Object{ .entries = &.{ idEntry, nestedObject } } ;
+    const rootObject = Bison.Object{ .entries = &.{ idEntry, nestedObject } };
 
     const result = try printRootObject(gpa, rootObject, 2);
     defer gpa.free(result);

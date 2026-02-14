@@ -32,21 +32,20 @@ pub const JsonValueType = union(JsonValueEnum) {
             },
             .Array => {
                 for (self.Array) |arrayValue| {
-                    switch(arrayValue) {
+                    switch (arrayValue) {
                         .Object => |objValue| {
                             objValue.free(gpa);
                         },
                         .Array => |arrayValues| {
                             for (arrayValues) |innerArrayValue| {
-                            innerArrayValue.free(gpa);
+                                innerArrayValue.free(gpa);
                             }
                         },
-                        else => {}
-                }
+                        else => {},
+                    }
                 }
                 gpa.free(self.Array);
-            }
-            ,
+            },
             else => {},
         }
     }
@@ -283,9 +282,8 @@ test "can parse a multiline list" {
     const randNumbers = JsonValueType{ .Array = &.{ JsonValueType{ .Int = 1 }, JsonValueType{ .Int = 2 }, JsonValueType{ .Int = 3 } } };
     const randEntry = ObjectEntry{ .name = "rand", .value = randNumbers };
 
-    const expected = JsonValueType{ .Object = Object{ .entries = &.{ randEntry } } };
+    const expected = JsonValueType{ .Object = Object{ .entries = &.{randEntry} } };
     try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
-
 }
 
 test "can parse complex list of objects" {

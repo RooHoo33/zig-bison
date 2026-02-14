@@ -75,7 +75,7 @@ fn printNode(gpa: std.mem.Allocator, node: JsonValueUnion, indent: u8) anyerror!
             var stringResult = try std.ArrayList(u8)
                 .initCapacity(gpa, 20);
             try stringResult.appendSlice(gpa, "[\n");
-            for(node.array.value, 0..) |listValue, index| {
+            for (node.array.value, 0..) |listValue, index| {
                 const result = try printNode(gpa, listValue, indent + indentSize);
                 defer gpa.free(result);
                 if (index != 0) {
@@ -123,10 +123,9 @@ test "can print a int node" {
 }
 
 test "can print a list of ints" {
-
-    const intValueOne: JsonValue =  JsonValue{.Int = 5}; 
-    const intValueTwo: JsonValue =  JsonValue{.Int = 2}; 
-    const array: ArrayNode = .{.name = "ages", .value = &.{intValueOne, intValueTwo}};
+    const intValueOne: JsonValue = JsonValue{ .Int = 5 };
+    const intValueTwo: JsonValue = JsonValue{ .Int = 2 };
+    const array: ArrayNode = .{ .name = "ages", .value = &.{ intValueOne, intValueTwo } };
     const gpa = std.testing.allocator;
     const result = try printNode(gpa, .{ .array = array }, 2);
     defer gpa.free(result);
