@@ -93,7 +93,7 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
 fn findMatchingEntry(object: Bison.Object, searchTokens: [][]const u8) ?Bison.ObjectEntry {
     if (searchTokens.len > 0) {
         for (object.entries) |entry| {
-            const matches = BisonFZF.matches(entry.name, searchTokens[0]);
+            const matches = BisonFZF.matches(entry.name, searchTokens[0], false);
             if (matches == false) {
                 continue;
             } else if (searchTokens.len > 1 and entry.value != .Object) {
