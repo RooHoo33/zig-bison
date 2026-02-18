@@ -5,6 +5,7 @@ const BisonPrint = @import("bison_print.zig");
 const Allocator = std.mem.Allocator;
 
 const TokenIterator = std.mem.SplitIterator(u8, .any);
+const TokenSearch = struct { keySearch: []const u8, valueSearch: ?[]const u8 };
 
 const BadArgError = error{
     EXTRA_ARG,
@@ -76,49 +77,117 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
         return BisonPrint.printValue(gpa, json, 0);
     }
     var searchTokensIter = std.mem.splitScalar(u8, search, '.');
-    var searchTokens = try std.ArrayList([]const u8).initCapacity(gpa, 5);
+    var searchTokens = try std.ArrayList(TokenSearch).initCapacity(gpa, 5);
     while (searchTokensIter.next()) |searchToken| {
-        try searchTokens.append(gpa, searchToken);
+        var indexOfValueSpecifier: ?usize = null;
+        for (searchToken, 0..) |char, index| {
+            if (char == '=') {
+                indexOfValueSpecifier = index;
+                break;
+            }
+        }
+        if (indexOfValueSpecifier) |_indexOfValueSpecifier| {
+            try searchTokens.append(gpa, .{ .keySearch = searchToken[0.._indexOfValueSpecifier], .valueSearch = searchToken[_indexOfValueSpecifier + 1 ..] });
+        } else {
+            try searchTokens.append(gpa, .{ .keySearch = searchToken, .valueSearch = null });
+        }
     }
     const searchTokensSlice = try searchTokens.toOwnedSlice(gpa);
     defer gpa.free(searchTokensSlice);
-    const match = findMatchingEntry(json.Object, searchTokensSlice);
+    const match = findMatchingEntry2(json, searchTokensSlice);
 
     if (match) |value| {
-        return BisonPrint.printValue(gpa, value.value, 0);
+        return BisonPrint.printValue(gpa, value, 0);
     } else {
         return "";
     }
 }
-fn findMatchingEntry(object: Bison.Object, searchTokens: [][]const u8) ?Bison.ObjectEntry {
-    if (searchTokens.len > 0) {
-        for (object.entries) |entry| {
-            const matches = BisonFZF.matches(entry.name, searchTokens[0], false);
-            if (matches == false) {
-                continue;
-            } else if (searchTokens.len > 1 and entry.value != .Object) {
-                continue;
-            } else if (searchTokens.len > 1) {
-                return findMatchingEntry(entry.value.Object, searchTokens[1..]);
-            } else {
-                return entry;
-            }
-        }
-        for (object.entries) |entry| {
-            switch (entry.value) {
-                .Object => {
-                    if (findMatchingEntry(entry.value.Object, searchTokens)) |nextedMatch| {
-                        return nextedMatch;
+fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch) ?Bison.JsonValueType {
+    var matchingType: ?Bison.JsonValueType = null;
+    if (searchTokens[0].valueSearch != null) {
+        matchingType = switch (jsonType) {
+            .Array => blk: {
+                for (jsonType.Array) |arrayEntry| {
+                    if (findMatchingEntry2(arrayEntry, searchTokens)) |match| {
+                        if (searchTokens.len > 1) {
+                            if (findMatchingEntry2(arrayEntry, searchTokens[1..])) |nestedMatch| {
+                                break :blk nestedMatch;
+                            }
+                        } else {
+                            break :blk match;
+                        }
                     }
-                },
-                else => {},
-            }
-        }
-
-        return null;
+                }
+                break :blk null;
+            },
+            .Object => blk: {
+                for (jsonType.Object.entries) |entry| {
+                    if (entry.value == .String and BisonFZF.matches(entry.name, searchTokens[0].keySearch, false) and BisonFZF.matches(entry.value.String, searchTokens[0].valueSearch.?, false)) {
+                        if (searchTokens.len > 1) {
+                            if (findMatchingEntry2(jsonType, searchTokens[1..])) |nestedMatch| {
+                                break :blk nestedMatch;
+                            }
+                        } else {
+                            return jsonType;
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            else => null,
+        };
     } else {
-        return null;
+        matchingType = switch (jsonType) {
+            .Array => blk: {
+                for (jsonType.Array) |arrayEntry| {
+                    if (findMatchingEntry2(arrayEntry, searchTokens)) |match| {
+                        if (searchTokens.len > 1) {
+                            break :blk findMatchingEntry2(match, searchTokens[1..]);
+                        } else {
+                            break :blk match;
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            .Object => blk: {
+                for (jsonType.Object.entries) |entry| {
+                    if (BisonFZF.matches(entry.name, searchTokens[0].keySearch, false)) {
+                        if (searchTokens.len > 1) {
+                            if (findMatchingEntry2(entry.value, searchTokens[1..])) |nested| {
+                                break :blk nested;
+                            }
+                        } else {
+                            break :blk entry.value;
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            .String => blk: {
+                if (BisonFZF.matches(jsonType.String, searchTokens[0].keySearch, false)) {
+                    break :blk jsonType;
+                } else {
+                    break :blk null;
+                }
+            },
+            else => null,
+        };
     }
+    if (matchingType != null) {
+        return matchingType;
+    }
+    switch (jsonType) {
+        .Object => {
+            for (jsonType.Object.entries) |entry| {
+                if (findMatchingEntry2(entry.value, searchTokens)) |nestedFound| {
+                    return nestedFound;
+                }
+            }
+        },
+        else => {},
+    }
+    return null;
 }
 
 test "if no search is passed the object is printed" {
@@ -256,6 +325,156 @@ test "non object nodes are discarded if there are more tokens to search though" 
         \\  3
         \\]
     ;
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "finds object in list" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\{
+        \\  "customer_name": "Alex Rivera",
+        \\  "purchases": [
+        \\    {
+        \\      "purchase_id": "P-9001",
+        \\      "timestamp": "2026-02-14T10:30:00Z",
+        \\      "orders": [
+        \\        {
+        \\          "order_id": "ORD-101",
+        \\          "payment_type": "CREDIT"
+        \\        },
+        \\        {
+        \\          "order_id": "ORD-102",
+        \\          "payment_type": "CASH"
+        \\        }
+        \\      ]
+        \\    },
+        \\    {
+        \\      "purchase_id": "P-9002",
+        \\      "timestamp": "2026-02-14T14:15:00Z",
+        \\      "orders": [
+        \\        {
+        \\          "order_id": "ORD-205",
+        \\          "payment_type": "CREDIT"
+        \\        }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+    ;
+    const search = "pur.or";
+
+    const expected =
+        \\[
+        \\  {
+        \\    "order_id": "ORD-101",
+        \\    "payment_type": "CREDIT"
+        \\  },
+        \\  {
+        \\    "order_id": "ORD-102",
+        \\    "payment_type": "CASH"
+        \\  }
+        \\]
+    ;
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "uses object key/val sytax" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\    {
+        \\      "orders": [
+        \\        {
+        \\          "order_id": "ORD-101",
+        \\          "payment_type": "CREDIT"
+        \\        },
+        \\        {
+        \\          "order_id": "ORD-102",
+        \\          "payment_type": "CASH"
+        \\        }
+        \\      ]
+        \\    }
+    ;
+    const search = "or.pay=cas";
+
+    const expected =
+        \\{
+        \\  "order_id": "ORD-102",
+        \\  "payment_type": "CASH"
+        \\}
+    ;
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "uses object key/val for complicated key val pairs" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\{
+        \\  "customer_name": "Alex Rivera",
+        \\  "purchases": [
+        \\    {
+        \\      "purchase_id": "P-9001",
+        \\      "timestamp": "2026-02-14T10:30:00Z",
+        \\      "orders": [
+        \\        {
+        \\          "order_id": "ORD-101",
+        \\          "payment_type": "CREDIT"
+        \\        },
+        \\        {
+        \\          "order_id": "ORD-102",
+        \\          "payment_type": "CASH"
+        \\        }
+        \\      ]
+        \\    },
+        \\    {
+        \\      "purchase_id": "P-9002",
+        \\      "timestamp": "2026-02-14T14:15:00Z",
+        \\      "orders": [
+        \\        {
+        \\          "order_id": "ORD-205",
+        \\          "payment_type": "CREDIT"
+        \\        },
+        \\        {
+        \\          "order_id": "ORD-206",
+        \\          "payment_type": "CASH"
+        \\        }
+        \\      ]
+        \\    }
+        \\  ]
+        \\}
+    ;
+    const search = "pur.purid=9002.or.pay=cas";
+
+    const expected =
+        \\{
+        \\  "order_id": "ORD-206",
+        \\  "payment_type": "CASH"
+        \\}
+    ;
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "can chain key/val searches to find nested field" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "name": "Jack",
+        \\    "value": {
+        \\      "age": 234
+        \\    }
+        \\  }
+    ;
+    const search = "id=abc.nam=jack.val.ag";
+
+    const expected = "234";
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(expected, result);
