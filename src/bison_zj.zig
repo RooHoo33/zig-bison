@@ -94,7 +94,7 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
     }
     const searchTokensSlice = try searchTokens.toOwnedSlice(gpa);
     defer gpa.free(searchTokensSlice);
-    const match = findMatchingEntry2(json, searchTokensSlice);
+    const match = try findMatchingEntry2(gpa, json, searchTokensSlice);
 
     if (match) |value| {
         return BisonPrint.printValue(gpa, value, 0);
@@ -102,15 +102,15 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
         return "";
     }
 }
-fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch) ?Bison.JsonValueType {
+fn findMatchingEntry2(gpa: Allocator, jsonType: Bison.JsonValueType, searchTokens: []TokenSearch) !?Bison.JsonValueType {
     var matchingType: ?Bison.JsonValueType = null;
     if (searchTokens[0].valueSearch != null) {
         matchingType = switch (jsonType) {
             .Array => blk: {
                 for (jsonType.Array) |arrayEntry| {
-                    if (findMatchingEntry2(arrayEntry, searchTokens)) |match| {
+                    if (try findMatchingEntry2(gpa, arrayEntry, searchTokens)) |match| {
                         if (searchTokens.len > 1) {
-                            if (findMatchingEntry2(arrayEntry, searchTokens[1..])) |nestedMatch| {
+                            if (try findMatchingEntry2(gpa, arrayEntry, searchTokens[1..])) |nestedMatch| {
                                 break :blk nestedMatch;
                             }
                         } else {
@@ -122,9 +122,32 @@ fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch
             },
             .Object => blk: {
                 for (jsonType.Object.entries) |entry| {
-                    if (entry.value == .String and BisonFZF.matches(entry.name, searchTokens[0].keySearch, false) and BisonFZF.matches(entry.value.String, searchTokens[0].valueSearch.?, false)) {
+                    const valueString: ?[]const u8 = switch(entry.value) {
+                        .String => |string| string,
+                        .Float => |float| try std.fmt.allocPrint(gpa, "{d}", .{float}),
+                        .Int => |int| try std.fmt.allocPrint(gpa, "{d}", .{int}),
+                        .Null => "null",
+                        .Boolean => |boolean| boolString: {
+                            if (boolean) {
+                                break :boolString "true";
+                            } else {
+                                break :boolString "false";
+                            }
+                        },
+                        else => null
+                    };
+                    defer {
+                        if (valueString != null and (entry.value == .Float or entry.value == .Int ) ){
+                            gpa.free(valueString.?);
+                        }
+                    }
+
+                    if (valueString != null and
+                        BisonFZF.matches(entry.name, searchTokens[0].keySearch, false) and
+                        BisonFZF.matches(valueString.?, searchTokens[0].valueSearch.?, false)
+                    ) {
                         if (searchTokens.len > 1) {
-                            if (findMatchingEntry2(jsonType, searchTokens[1..])) |nestedMatch| {
+                            if (try findMatchingEntry2(gpa, jsonType, searchTokens[1..])) |nestedMatch| {
                                 break :blk nestedMatch;
                             }
                         } else {
@@ -140,9 +163,9 @@ fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch
         matchingType = switch (jsonType) {
             .Array => blk: {
                 for (jsonType.Array) |arrayEntry| {
-                    if (findMatchingEntry2(arrayEntry, searchTokens)) |match| {
+                    if (try findMatchingEntry2(gpa, arrayEntry, searchTokens)) |match| {
                         if (searchTokens.len > 1) {
-                            break :blk findMatchingEntry2(match, searchTokens[1..]);
+                            break :blk try findMatchingEntry2(gpa, match, searchTokens[1..]);
                         } else {
                             break :blk match;
                         }
@@ -154,7 +177,7 @@ fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch
                 for (jsonType.Object.entries) |entry| {
                     if (BisonFZF.matches(entry.name, searchTokens[0].keySearch, false)) {
                         if (searchTokens.len > 1) {
-                            if (findMatchingEntry2(entry.value, searchTokens[1..])) |nested| {
+                            if (try findMatchingEntry2(gpa, entry.value, searchTokens[1..])) |nested| {
                                 break :blk nested;
                             }
                         } else {
@@ -180,7 +203,7 @@ fn findMatchingEntry2(jsonType: Bison.JsonValueType, searchTokens: []TokenSearch
     switch (jsonType) {
         .Object => {
             for (jsonType.Object.entries) |entry| {
-                if (findMatchingEntry2(entry.value, searchTokens)) |nestedFound| {
+                if (try findMatchingEntry2(gpa, entry.value, searchTokens)) |nestedFound| {
                     return nestedFound;
                 }
             }
@@ -294,7 +317,7 @@ test "can find double nested object" {
         \\  2,
         \\  3
         \\]
-    ;
+        ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(expected, result);
@@ -324,7 +347,7 @@ test "non object nodes are discarded if there are more tokens to search though" 
         \\  2,
         \\  3
         \\]
-    ;
+        ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(expected, result);
@@ -376,10 +399,10 @@ test "finds object in list" {
         \\    "payment_type": "CASH"
         \\  }
         \\]
-    ;
-    const result = try findObject(gpa, json, search);
-    defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+            ;
+        const result = try findObject(gpa, json, search);
+        defer gpa.free(result);
+        try std.testing.expectEqualStrings(expected, result);
 }
 
 test "uses object key/val sytax" {
@@ -475,6 +498,102 @@ test "can chain key/val searches to find nested field" {
     const search = "id=abc.nam=jack.val.ag";
 
     const expected = "234";
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+test "can filter by float" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "name": "Jack",
+        \\    "value": {
+        \\      "price": -9.231,
+        \\      "name": "Jack"
+        \\    }
+        \\  }
+    ;
+    const search = "pr=-93";
+    const expected = 
+        \\{
+        \\  "price": -9.231,
+        \\  "name": "Jack"
+        \\}
+    ;
+
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+test "can filter by int" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "name": "Jack",
+        \\    "value": {
+        \\      "age": -123,
+        \\      "name": "Jack"
+        \\    }
+        \\  }
+    ;
+    const search = "ag=-2";
+    const expected = 
+        \\{
+        \\  "age": -123,
+        \\  "name": "Jack"
+        \\}
+    ;
+
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+test "can filter by boolean" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "name": "Jack",
+        \\    "value": {
+        \\      "is_cool": true,
+        \\      "name": "Jack"
+        \\    }
+        \\  }
+    ;
+    const search = "cool=rU";
+    const expected = 
+        \\{
+        \\  "is_cool": true,
+        \\  "name": "Jack"
+        \\}
+    ;
+
+    const result = try findObject(gpa, json, search);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+test "can filter by null" {
+    const gpa = std.testing.allocator;
+    const json =
+        \\  {
+        \\    "id": "abc123",
+        \\    "name": "Jack",
+        \\    "value": {
+        \\      "missing": null,
+        \\      "name": "Jack"
+        \\    }
+        \\  }
+    ;
+    const search = "miss=nll";
+    const expected = 
+        \\{
+        \\  "missing": null,
+        \\  "name": "Jack"
+        \\}
+    ;
+
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(expected, result);
