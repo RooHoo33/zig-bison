@@ -73,6 +73,7 @@ fn parseObjectKey(jsonBlob: []const u8) struct { []const u8, Index } {
             return .{ jsonBlob[startIndex..index], index };
         }
     }
+    std.debug.print("We couldnt get the key: {s}\n", .{jsonBlob});
     unreachable;
 }
 fn parseNumber(jsonBlob: []const u8) !struct { JsonValueType, Index } {
@@ -85,10 +86,10 @@ fn parseNumber(jsonBlob: []const u8) !struct { JsonValueType, Index } {
         } else if (char < '0' or char > '9') {
             if (isInt) {
                 const value = try std.fmt.parseInt(i64, jsonBlob[0..index], 10);
-                return .{ JsonValueType{ .Int = value }, index };
+                return .{ JsonValueType{ .Int = value }, index - 1 };
             } else {
                 const value = try std.fmt.parseFloat(f64, jsonBlob[0..index]);
-                return .{ JsonValueType{ .Float = value }, index };
+                return .{ JsonValueType{ .Float = value }, index - 1 };
             }
         }
     }
@@ -123,7 +124,7 @@ fn parseString(jsonBlob: []const u8) !struct { JsonValueType, Index } {
 }
 fn parseValue(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueType, Index } {
     for (jsonBlob, 0..) |char, index| {
-        if (char == ' ') {
+        if (char == ' ' or char == '\n') {
             continue;
         } else if (char == '-' or (char >= '0' and char <= '9')) {
             const value: JsonValueType, const returnIndex: Index = try parseNumber(jsonBlob[index..]);
@@ -147,7 +148,7 @@ fn parseValue(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueT
             return .{ value, index + returnIndex };
         }
     }
-    std.debug.print("Trying to read value {s}", .{jsonBlob});
+    std.debug.print("Could not read value {s}", .{jsonBlob});
     unreachable;
 }
 
@@ -162,7 +163,7 @@ fn parseList(gpa: Allocator, jsonBlob: []const u8) anyerror!struct { JsonValueTy
             return .{ JsonValueType{ .Array = try values.toOwnedSlice(gpa) }, index };
         } else {
             const value, const valueIndexOffset = try parseValue(gpa, jsonBlob[index..]);
-            index += valueIndexOffset;
+            index += valueIndexOffset + 1;
             try values.append(gpa, value);
         }
     }
@@ -323,5 +324,25 @@ test "can parse complex list of objects" {
 
     const expected = JsonValueType{ .Object = Object{ .entries = &.{ nameEntry, purchasesEntry } } };
 
+    try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
+}
+
+test "can parse a list of strings" {
+    const json =
+        \\{
+        \\  "names": [
+        \\      "Bill",
+        \\      "Bob",
+        \\      "Fred"
+        \\  ]
+        \\}
+    ;
+    const gpa = std.testing.allocator;
+    var result = try parseJson(gpa, json);
+    defer result.free(gpa);
+    const names = JsonValueType{ .Array = &.{ JsonValueType{ .String = "Bill" }, JsonValueType{ .String = "Bob" }, JsonValueType{ .String = "Fred" } } };
+    const namesEntry = ObjectEntry{ .name = "names", .value = names };
+
+    const expected = JsonValueType{ .Object = Object{ .entries = &.{namesEntry} } };
     try std.testing.expectEqualDeep(expected.Object.entries, result.Object.entries);
 }
