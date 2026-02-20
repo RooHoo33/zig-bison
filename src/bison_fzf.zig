@@ -23,15 +23,14 @@ const SearchToken = struct {
     }
 };
 
-const FzfSearch = struct {
+pub const FzfSearch = struct {
     tokens: []const SearchToken,
 
-    fn free(self: *const FzfSearch, gpa: std.mem.Allocator) void {
+    pub fn free(self: *const FzfSearch, gpa: std.mem.Allocator) void {
         gpa.free(self.tokens);
     }
 
-    fn fromString(gpa: std.mem.Allocator, string: []const u8) !FzfSearch {
-        std.debug.print("We are starting with string {s}<eof>\n", .{string});
+    pub fn fromString(gpa: std.mem.Allocator, string: []const u8) !FzfSearch {
         if (string.len == 0) {
             return .{ .tokens = &.{} };
         }
@@ -42,7 +41,6 @@ const FzfSearch = struct {
 
         for (string, 0..) |char, index| {
             if (char == ' ') {
-                std.debug.print("We got string {s}<eof>\n", .{string[lastIndex..index]});
                 try tokenList.append(gpa, SearchToken.fromString(string[lastIndex..index]));
                 lastIndex = index + 1;
             }
@@ -55,7 +53,7 @@ const FzfSearch = struct {
 
         return FzfSearch{ .tokens = try tokenList.toOwnedSlice(gpa) };
     }
-    fn matches(self: *const FzfSearch, input: []const u8) bool {
+    pub fn matches(self: *const FzfSearch, input: []const u8) bool {
         for (self.tokens) |token| {
             if (token.matches(input) == false) {
                 return false;

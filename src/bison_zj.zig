@@ -5,7 +5,7 @@ const BisonPrint = @import("bison_print.zig");
 const Allocator = std.mem.Allocator;
 
 const TokenIterator = std.mem.SplitIterator(u8, .any);
-const TokenSearch = struct { keySearch: []const u8, valueSearch: ?[]const u8 };
+const TokenSearch = struct { keySearch: BisonFZF.FzfSearch, valueSearch: ?BisonFZF.FzfSearch };
 
 const BadArgError = error{
     EXTRA_ARG,
@@ -78,6 +78,14 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
     }
     var searchTokensIter = std.mem.splitScalar(u8, search, '.');
     var searchTokens = try std.ArrayList(TokenSearch).initCapacity(gpa, 5);
+    defer {
+        for (searchTokens.items) |searchToken| {
+            searchToken.keySearch.free(gpa);
+            if (searchToken.valueSearch) |valueSearch| {
+                valueSearch.free(gpa);
+            }
+        }
+    }
     while (searchTokensIter.next()) |searchToken| {
         var indexOfValueSpecifier: ?usize = null;
         for (searchToken, 0..) |char, index| {
@@ -87,13 +95,25 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
             }
         }
         if (indexOfValueSpecifier) |_indexOfValueSpecifier| {
-            try searchTokens.append(gpa, .{ .keySearch = searchToken[0.._indexOfValueSpecifier], .valueSearch = searchToken[_indexOfValueSpecifier + 1 ..] });
+            const keyFzfSeach = try BisonFZF.FzfSearch.fromString(gpa, searchToken[0.._indexOfValueSpecifier]);
+            const valueFzfSearch = try BisonFZF.FzfSearch.fromString(gpa, searchToken[_indexOfValueSpecifier + 1 ..]);
+
+            try searchTokens.append(gpa, .{ .keySearch = keyFzfSeach, .valueSearch = valueFzfSearch });
         } else {
-            try searchTokens.append(gpa, .{ .keySearch = searchToken, .valueSearch = null });
+            const keyFzfSeach = try BisonFZF.FzfSearch.fromString(gpa, searchToken);
+            try searchTokens.append(gpa, .{ .keySearch = keyFzfSeach, .valueSearch = null });
         }
     }
     const searchTokensSlice = try searchTokens.toOwnedSlice(gpa);
     defer gpa.free(searchTokensSlice);
+    defer {
+        for (searchTokensSlice) |searchToken| {
+            searchToken.keySearch.free(gpa);
+            if (searchToken.valueSearch) |valueSearch| {
+                valueSearch.free(gpa);
+            }
+        }
+    }
     const match = try findMatchingEntry2(gpa, json, searchTokensSlice);
 
     if (match) |value| {
@@ -143,8 +163,8 @@ fn findMatchingEntry2(gpa: Allocator, jsonType: Bison.JsonValueType, searchToken
                     }
 
                     if (valueString != null and
-                        BisonFZF.matches(entry.name, searchTokens[0].keySearch, false) and
-                        BisonFZF.matches(valueString.?, searchTokens[0].valueSearch.?, false))
+                        searchTokens[0].keySearch.matches(entry.name) and
+                        searchTokens[0].valueSearch.?.matches(valueString.?))
                     {
                         if (searchTokens.len > 1) {
                             if (try findMatchingEntry2(gpa, jsonType, searchTokens[1..])) |nestedMatch| {
@@ -175,7 +195,7 @@ fn findMatchingEntry2(gpa: Allocator, jsonType: Bison.JsonValueType, searchToken
             },
             .Object => blk: {
                 for (jsonType.Object.entries) |entry| {
-                    if (BisonFZF.matches(entry.name, searchTokens[0].keySearch, false)) {
+                    if (searchTokens[0].keySearch.matches(entry.name)) {
                         if (searchTokens.len > 1) {
                             if (try findMatchingEntry2(gpa, entry.value, searchTokens[1..])) |nested| {
                                 break :blk nested;
@@ -188,7 +208,7 @@ fn findMatchingEntry2(gpa: Allocator, jsonType: Bison.JsonValueType, searchToken
                 break :blk null;
             },
             .String => blk: {
-                if (BisonFZF.matches(jsonType.String, searchTokens[0].keySearch, false)) {
+                if (searchTokens[0].keySearch.matches(jsonType.String)) {
                     break :blk jsonType;
                 } else {
                     break :blk null;
