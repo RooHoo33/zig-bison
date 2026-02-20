@@ -48,12 +48,20 @@ const FzfSearch = struct {
             }
         }
 
-        // we didnt find any spaces in the search so theres only one token
-        if (lastIndex == 0) {
-            try tokenList.append(gpa, SearchToken.fromString(string));
+        // if there are still dangling chars after the last space, add them back
+        if (lastIndex != string.len - 1) {
+            try tokenList.append(gpa, SearchToken.fromString(string[lastIndex..]));
         }
 
         return FzfSearch{ .tokens = try tokenList.toOwnedSlice(gpa) };
+    }
+    fn matches(self: *const FzfSearch, input: []const u8) bool {
+        for (self.tokens) |token| {
+            if (token.matches(input) == false) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -71,13 +79,26 @@ test "can create FzfSearch from simple string" {
 }
 test "can create FzfSearch from mutiple tokens" {
     const gpa = std.testing.allocator;
-    const search = try FzfSearch.fromString(gpa, "hi jack ");
+    const search = try FzfSearch.fromString(gpa, "hi jack");
     defer search.free(gpa);
     const expected = FzfSearch{ .tokens = &.{
         SearchToken{ .type = SearchTokenType.FUZZY, .searchChars = "hi" },
         SearchToken{ .type = SearchTokenType.FUZZY, .searchChars = "jack" },
     } };
     try std.testing.expectEqualDeep(expected, search);
+}
+test "if a fzf searchs token doesnt match the input false is returned" {
+    const gpa = std.testing.allocator;
+    const search = try FzfSearch.fromString(gpa, "appl pie");
+    defer search.free(gpa);
+    try std.testing.expect(search.matches("apple tart") == false);
+    try std.testing.expect(search.matches("blueberry pie") == false);
+}
+test "if all fzf search tokens  match the input true is returned" {
+    const gpa = std.testing.allocator;
+    const search = try FzfSearch.fromString(gpa, "appl pie");
+    defer search.free(gpa);
+    try std.testing.expect(search.matches("apple pie, yum!"));
 }
 
 test "empty string is considered a FUZZY" {
