@@ -52,7 +52,7 @@ pub const JsonValueType = union(JsonValueEnum) {
 };
 
 pub fn parseJson(gpa: Allocator, jsonBlob: []const u8) !JsonValueType {
-    const result =  try parseValue(gpa, jsonBlob);
+    const result = try parseValue(gpa, jsonBlob);
     return result.@"0";
 }
 fn parseObjectKey(jsonBlob: []const u8) struct { []const u8, Index } {
