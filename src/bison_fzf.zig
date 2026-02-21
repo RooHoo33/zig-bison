@@ -9,8 +9,13 @@ const SearchToken = struct {
         if (string.len == 0) {
             return .{ .type = SearchTokenType.FUZZY, .searchChars = "" };
         }
-
-        return .{ .type = SearchTokenType.FUZZY, .searchChars = string[0..] };
+        if (string[0] == '\'' and string.len > 1 and string[string.len - 1] == '\'') {
+            return .{ .type = SearchTokenType.EXACT_WORD, .searchChars = string[1 .. string.len - 1] };
+        } else if (string[0] == '\'') {
+            return .{ .type = SearchTokenType.EXACT, .searchChars = string[1..] };
+        } else {
+            return .{ .type = SearchTokenType.FUZZY, .searchChars = string[0..] };
+        }
     }
 
     fn matches(self: *const SearchToken, input: []const u8) bool {
@@ -18,8 +23,55 @@ const SearchToken = struct {
             .FUZZY => {
                 return fuzzyMatches(input, self.searchChars, false);
             },
+            .EXACT => return matchesExact(input, self.searchChars),
+            .EXACT_WORD => return matchesExactWord(input, self.searchChars),
             else => unreachable,
         }
+    }
+
+    fn matchesExactWord(input: []const u8, searchChars: []const u8) bool {
+        outer: for (input, 0..) |_, inputIndex| {
+            var searchIndex: usize = 0;
+            if (inputIndex != 0 and input[inputIndex - 1] != ' ') {
+                continue :outer;
+            }
+            for (input[inputIndex..], inputIndex..) |innerInputLoop, innerLoopIndex| {
+                if (searchIndex == searchChars.len) {
+                    return true;
+                } else if (innerInputLoop == searchChars[searchIndex]) {
+                    searchIndex += 1;
+                    if (searchIndex == searchChars.len) {
+                        if (innerLoopIndex == input.len - 1 or input[innerLoopIndex + 1] == ' ') {
+                            return true;
+                        } else {
+                            continue :outer;
+                        }
+                    }
+                } else {
+                    continue :outer;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn matchesExact(input: []const u8, searchChars: []const u8) bool {
+        outer: for (input, 0..) |_, inputIndex| {
+            var searchIndex: usize = 0;
+            for (input[inputIndex..]) |innerInputLoop| {
+                if (searchIndex == searchChars.len) {
+                    return true;
+                } else if (innerInputLoop == searchChars[searchIndex]) {
+                    searchIndex += 1;
+                    if (searchIndex == searchChars.len) {
+                        return true;
+                    }
+                } else {
+                    continue :outer;
+                }
+            }
+        }
+        return false;
     }
 };
 
@@ -68,6 +120,7 @@ test "can create FzfSearch from empty string" {
     const search = try FzfSearch.fromString(gpa, "");
     try std.testing.expectEqualSlices(SearchToken, &.{}, search.tokens);
 }
+
 test "can create FzfSearch from simple string" {
     const gpa = std.testing.allocator;
     const search = try FzfSearch.fromString(gpa, "hello");
@@ -116,9 +169,63 @@ test "fuzzy match" {
     const token = SearchToken.fromString("hlo");
     try std.testing.expect(token.matches("Hello!"));
 }
+
+fn testTokenization(tokenString: []const u8, tokenType: SearchTokenType, resultToken: []const u8) !void {
+    const token = SearchToken.fromString(tokenString);
+
+    try std.testing.expectEqualStrings(resultToken, token.searchChars);
+    try std.testing.expectEqual(tokenType, token.type);
+}
+fn testMatch(tokenString: []const u8, input: []const u8) !void {
+    const token = SearchToken.fromString(tokenString);
+    try std.testing.expect(token.matches(input));
+}
+fn testNotMatch(tokenString: []const u8, input: []const u8) !void {
+    const token = SearchToken.fromString(tokenString);
+    try std.testing.expect(!token.matches(input));
+}
 test "fuzzy match empty string" {
     const token = SearchToken.fromString("");
     try std.testing.expect(token.matches("Hello!"));
+}
+
+test "starting quote is considered exact match" {
+    try testTokenization("'ell", SearchTokenType.EXACT, "ell");
+}
+
+test "if just a quote, its an exact match with no string" {
+    try testTokenization("'", SearchTokenType.EXACT, "");
+}
+
+test "exact match matches in order" {
+    try testMatch("'ell", "helo helelello");
+    try testMatch("'ello", "hello");
+}
+test "exact match matches if just quote" {
+    try testMatch("'", "hello");
+}
+
+test "doesnt match if a char is missing in the middle of the token" {
+    try testNotMatch("'eel", "hello");
+}
+
+test "starting and ending quote is considered exact word match" {
+    try testTokenization("'ell'", SearchTokenType.EXACT_WORD, "ell");
+}
+
+test "exact match matches if word is bordered by spaces or matches exactly" {
+    try testMatch("'hello'", "hey hello");
+    try testMatch("'hello'", "a hello a");
+    try testMatch("'hello'", "hello how are you");
+}
+test "exact match matches if just double quotes" {
+    try testMatch("''", "hello");
+}
+
+test "doesnt match if a theres an extra char in the match thats not a space" {
+    try testNotMatch("'bc'", " abcd ");
+    try testNotMatch("'bc'", " abc ");
+    try testNotMatch("'bc'", " bcd ");
 }
 
 fn isLetter(char: u8) bool {
