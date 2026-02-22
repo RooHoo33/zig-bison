@@ -2,6 +2,7 @@ const std = @import("std");
 const Bison = @import("bison_v2.zig");
 const BisonFZF = @import("bison_fzf.zig");
 const BisonPrint = @import("bison_print.zig");
+const StringTestingUtils = @import("string_testing_utils.zig");
 const Allocator = std.mem.Allocator;
 
 const TokenIterator = std.mem.SplitIterator(u8, .any);
@@ -74,7 +75,7 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
     var json = try Bison.parseJson(gpa, jsonBlobl);
     defer json.free(gpa);
     if (search.len == 0) {
-        return BisonPrint.printValue(gpa, json, 0);
+        return BisonPrint.print(gpa, json);
     }
     var searchTokensIter = std.mem.splitScalar(u8, search, '.');
     var searchTokens = try std.ArrayList(TokenSearch).initCapacity(gpa, 5);
@@ -117,7 +118,7 @@ fn findObject(gpa: Allocator, jsonBlobl: []const u8, search: []const u8) ![]u8 {
     const match = try findMatchingEntry2(gpa, json, searchTokensSlice);
 
     if (match) |value| {
-        return BisonPrint.printValue(gpa, value, 0);
+        return BisonPrint.print(gpa, value);
     } else {
         return "";
     }
@@ -253,7 +254,7 @@ test "if no search is passed the object is printed" {
 
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(json, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, json, result);
 }
 
 test "can find nested object" {
@@ -287,7 +288,7 @@ test "can find nested object" {
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "if key doesnt match root, children are checked" {
@@ -311,7 +312,7 @@ test "if key doesnt match root, children are checked" {
     const expected = "\"Jack \\\"Jack\\\" Me\"";
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 test "can find double nested object" {
     const gpa = std.testing.allocator;
@@ -340,7 +341,7 @@ test "can find double nested object" {
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "non object nodes are discarded if there are more tokens to search though" {
@@ -370,7 +371,7 @@ test "non object nodes are discarded if there are more tokens to search though" 
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "finds object in list" {
@@ -422,7 +423,7 @@ test "finds object in list" {
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "uses object key/val sytax" {
@@ -451,7 +452,7 @@ test "uses object key/val sytax" {
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "uses object key/val for complicated key val pairs" {
@@ -501,7 +502,7 @@ test "uses object key/val for complicated key val pairs" {
     ;
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 
 test "can chain key/val searches to find nested field" {
@@ -520,7 +521,7 @@ test "can chain key/val searches to find nested field" {
     const expected = "234";
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 test "can filter by float" {
     const gpa = std.testing.allocator;
@@ -544,7 +545,7 @@ test "can filter by float" {
 
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 test "can filter by int" {
     const gpa = std.testing.allocator;
@@ -568,7 +569,7 @@ test "can filter by int" {
 
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 test "can filter by boolean" {
     const gpa = std.testing.allocator;
@@ -592,7 +593,7 @@ test "can filter by boolean" {
 
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
 test "can filter by null" {
     const gpa = std.testing.allocator;
@@ -616,5 +617,5 @@ test "can filter by null" {
 
     const result = try findObject(gpa, json, search);
     defer gpa.free(result);
-    try std.testing.expectEqualStrings(expected, result);
+    try StringTestingUtils.expectEqualsStringWithoutColor(gpa, expected, result);
 }
