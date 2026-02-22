@@ -13,6 +13,10 @@ const SearchToken = struct {
             return .{ .type = SearchTokenType.EXACT_WORD, .searchChars = string[1 .. string.len - 1] };
         } else if (string[0] == '\'') {
             return .{ .type = SearchTokenType.EXACT, .searchChars = string[1..] };
+        } else if (string[0] == '^') {
+            return .{ .type = SearchTokenType.START, .searchChars = string[1..] };
+        } else if (string[0] == '$') {
+            return .{ .type = SearchTokenType.END, .searchChars = string[1..] };
         } else {
             return .{ .type = SearchTokenType.FUZZY, .searchChars = string[0..] };
         }
@@ -21,52 +25,43 @@ const SearchToken = struct {
     fn matches(self: *const SearchToken, input: []const u8) bool {
         switch (self.type) {
             .FUZZY => {
-                return fuzzyMatches(input, self.searchChars, false);
+                return matchesExactWord(input, self.searchChars, false, false, false);
+                //return fuzzyMatches(input, self.searchChars, false);
             },
-            .EXACT => return matchesExact(input, self.searchChars),
-            .EXACT_WORD => return matchesExactWord(input, self.searchChars),
-            else => unreachable,
+            .EXACT => return matchesExactWord(input, self.searchChars, true, false, false),
+            .EXACT_WORD => return matchesExactWord(input, self.searchChars, true, true, true),
+            .START => return matchesExactWord(input, self.searchChars, true, true, false),
+            .END => return matchesExactWord(input, self.searchChars, true, false, true),
         }
     }
 
-    fn matchesExactWord(input: []const u8, searchChars: []const u8) bool {
+    fn toLowerCase(char: u8) u8 {
+        if (char > 'Z') {
+            return char - 32;
+        } else {
+            return char;
+        }
+    }
+
+    fn matchesExactWord(input: []const u8, searchChars: []const u8, exact: bool, startWord: bool, endWord: bool) bool {
         outer: for (input, 0..) |_, inputIndex| {
             var searchIndex: usize = 0;
-            if (inputIndex != 0 and input[inputIndex - 1] != ' ') {
+            if (startWord and inputIndex != 0 and input[inputIndex - 1] != ' ') {
                 continue :outer;
             }
             for (input[inputIndex..], inputIndex..) |innerInputLoop, innerLoopIndex| {
                 if (searchIndex == searchChars.len) {
                     return true;
-                } else if (innerInputLoop == searchChars[searchIndex]) {
+                } else if (toLowerCase(innerInputLoop) == toLowerCase(searchChars[searchIndex])) {
                     searchIndex += 1;
                     if (searchIndex == searchChars.len) {
-                        if (innerLoopIndex == input.len - 1 or input[innerLoopIndex + 1] == ' ') {
+                        if (endWord == false or (innerLoopIndex == input.len - 1 or input[innerLoopIndex + 1] == ' ')) {
                             return true;
                         } else {
                             continue :outer;
                         }
                     }
-                } else {
-                    continue :outer;
-                }
-            }
-        }
-        return false;
-    }
-
-    fn matchesExact(input: []const u8, searchChars: []const u8) bool {
-        outer: for (input, 0..) |_, inputIndex| {
-            var searchIndex: usize = 0;
-            for (input[inputIndex..]) |innerInputLoop| {
-                if (searchIndex == searchChars.len) {
-                    return true;
-                } else if (innerInputLoop == searchChars[searchIndex]) {
-                    searchIndex += 1;
-                    if (searchIndex == searchChars.len) {
-                        return true;
-                    }
-                } else {
+                } else if (exact) {
                     continue :outer;
                 }
             }
@@ -214,7 +209,7 @@ test "starting and ending quote is considered exact word match" {
 }
 
 test "exact match matches if word is bordered by spaces or matches exactly" {
-    try testMatch("'hello'", "hey hello");
+    try testMatch("'Hello'", "hey hello");
     try testMatch("'hello'", "a hello a");
     try testMatch("'hello'", "hello how are you");
 }
@@ -226,6 +221,28 @@ test "doesnt match if a theres an extra char in the match thats not a space" {
     try testNotMatch("'bc'", " abcd ");
     try testNotMatch("'bc'", " abc ");
     try testNotMatch("'bc'", " bcd ");
+}
+
+test "matches start word" {
+    try testMatch("^hel", "hey hello");
+    try testMatch("^hEllo", "hey hello");
+    try testMatch("^hello", "hello");
+    try testMatch("^hello", "hello how are you?");
+}
+test "doesnt matches start word" {
+    try testNotMatch("^hel", "hey hallo");
+    try testNotMatch("^eLlo", "hello");
+}
+
+test "matches end word" {
+    try testMatch("$eLlo", "hey hello");
+    try testMatch("$hello", "hey hello hi");
+    try testMatch("$hello", "hello");
+    try testMatch("$hello", "hello how are you?");
+}
+test "doesnt matches end word" {
+    try testNotMatch("$hello", "hey hallo");
+    try testNotMatch("$hel", "hello");
 }
 
 fn isLetter(char: u8) bool {
